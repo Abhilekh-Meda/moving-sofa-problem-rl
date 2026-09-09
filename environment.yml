@@ -1,0 +1,15 @@
+name: sofa-problem
+channels:
+  - pytorch
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - pytorch
+  - numpy
+  - matplotlib
+  - shapely
+  - pip
+  - pip:
+      - gymnasium
+      - imageio
