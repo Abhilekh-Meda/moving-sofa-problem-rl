@@ -1,7 +1,7 @@
 """Matplotlib rendering for SofaEnv: single frames and full rollouts."""
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Callable, List, Optional
 
 import numpy as np
 
@@ -45,8 +45,9 @@ def render_frame(env, save_path: Optional[str] = None):
     ax.set_xlim(-L * 0.55, w * 1.5)
     ax.set_ylim(-L * 0.55, w * 1.5)
     ax.set_aspect("equal")
+    x, y, theta = env.pose
     ax.set_title(
-        f"theta={env.pose[2]:.2f} rad  s={env.s:.2f}"
+        f"x={x:.2f} y={y:.2f} theta={theta:.2f} rad"
         + ("  COLLIDING" if colliding else "")
     )
 
@@ -66,24 +67,33 @@ def render_frame(env, save_path: Optional[str] = None):
     return None
 
 
-def record_rollout(env, seed: Optional[int] = None) -> List[np.ndarray]:
-    """Play a candidate (shape, motion) pair start to finish, collecting frames.
+def record_rollout(
+    env,
+    policy: Optional[Callable[[np.ndarray], np.ndarray]] = None,
+    max_steps: Optional[int] = None,
+    seed: Optional[int] = None,
+    reset_options: Optional[dict] = None,
+) -> List[np.ndarray]:
+    """Run one episode and collect rgb_array frames for later playback/saving.
 
-    The motion is fully specified ahead of time, so this just steps the env
-    (no policy/action involved) until it terminates.
+    `policy(obs) -> action`; defaults to random actions from env.action_space.
     """
     prev_mode = env.render_mode
     env.render_mode = "rgb_array"
     try:
         frames = []
-        obs, info = env.reset(seed=seed)
+        obs, info = env.reset(seed=seed, options=reset_options)
         frames.append(env.render())
 
         done = False
-        while not done:
-            obs, reward, terminated, truncated, info = env.step()
+        steps = 0
+        limit = max_steps or env.max_steps
+        while not done and steps < limit:
+            action = policy(obs) if policy is not None else env.action_space.sample()
+            obs, reward, terminated, truncated, info = env.step(action)
             frames.append(env.render())
             done = terminated or truncated
+            steps += 1
         return frames
     finally:
         env.render_mode = prev_mode

@@ -1,15 +1,15 @@
-"""Smoke test: play back an arbitrary (untrained) shape + Bezier motion pair.
+"""Smoke test: a fixed square shape, random per-step actions moving it.
 
-Both the square and the motion's control points here are hand-picked
-placeholders -- SofaEnv doesn't care how either was produced. There's no
-expectation this particular pair is valid; this just exercises the
-construct-shape / construct-motion / play-rollout pipeline end to end.
+The square here is just a placeholder -- SofaEnv doesn't care how a shape
+was produced. This exercises the reset/step/render loop with an untrained
+(random) policy, standing in for wherever the real RL agent's actions
+will come from later.
 """
 import os
 
 import numpy as np
 
-from sofa_env import SofaEnv, BezierMotion, polygon_from_points, record_rollout, save_gif
+from sofa_env import SofaEnv, polygon_from_points, record_rollout, save_gif
 
 
 def main():
@@ -25,23 +25,14 @@ def main():
     )
     shape = polygon_from_points(square)
 
-    # x, y: start deep in the horizontal arm, sweep toward the corner.
-    # t = tan(theta/2): 0 -> 1 takes theta from 0 -> pi/2.
-    motion = BezierMotion(
-        x_points=[-5.0, -2.0, 0.5],
-        y_points=[0.5, 0.5, -2.0],
-        t_points=[0.0, 0.0, 1.0],
-    )
-
     env = SofaEnv(
         shape=shape,
-        motion=motion,
         corridor_width=width,
-        collision_mode="flag",
-        n_steps=200,
+        collision_mode="reject",
+        max_steps=300,
     )
 
-    frames = record_rollout(env, seed=0)
+    frames = record_rollout(env, policy=None, seed=0)
 
     out_dir = os.path.join(os.path.dirname(__file__), "..", "outputs")
     os.makedirs(out_dir, exist_ok=True)
