@@ -20,9 +20,9 @@ from gymnasium import spaces
 from shapely.affinity import rotate, translate
 from shapely.geometry import Polygon, box
 
+from . import geodesic
 from .corridor import build_l_corridor
 from .shape import polygon_from_points
-from .rewards import default_reward_fn
 
 RewardFn = Callable[..., float]
 
@@ -34,49 +34,67 @@ class SofaEnv(gym.Env):
         self,
         shape: Union[Polygon, np.ndarray],
         corridor_width: float = 1.0,
-        arm_length: float = 10.0,
+        arm_length: Optional[float] = None,
         goal_depth: Optional[float] = None,
-        max_steps: int = 300,
+        max_steps: int = 1000,
         max_dxy: float = 0.05,
         max_dtheta: float = 0.05,
         collision_mode: str = "terminate",
+        geodesic_resolution: int = 40,
         reward_fn: Optional[RewardFn] = None,
         render_mode: Optional[str] = None,
     ):
         super().__init__()
-        self.base_shape = (
+        base_shape = (
             shape if isinstance(shape, Polygon) else polygon_from_points(shape)
         )
-        if not self.base_shape.is_valid or self.base_shape.area <= 0:
+        if not base_shape.is_valid or base_shape.area <= 0:
             raise ValueError("shape must be a valid polygon with positive area")
 
         if collision_mode not in ("terminate", "reject"):
             raise ValueError("collision_mode must be 'terminate' or 'reject'")
 
+        # Recentre so the shape's own origin is its centroid: _posed_polygon
+        # rotates about (0, 0) in local coordinates
+        centroid = base_shape.centroid
+        self.base_shape = translate(base_shape, xoff=-centroid.x, yoff=-centroid.y)
+
         self.corridor_width = corridor_width
-        self.arm_length = arm_length
-        self.corridor = build_l_corridor(corridor_width, arm_length)
+        # Default: a width x width corner plus one width-sized run in each arm
+        self.arm_length = arm_length if arm_length is not None else 2 * corridor_width
+        self.corridor = build_l_corridor(corridor_width, self.arm_length)
         # Goal: fully inside a region deep in the vertical arm, mirroring
-        # where the episode starts (deep in the horizontal arm). Purely
-        # positional -- says nothing about what theta should be to get there.
-        self.goal_depth = goal_depth if goal_depth is not None else arm_length / 2
-        self.goal_region = box(0.0, -arm_length, corridor_width, -self.goal_depth)
+        # where the episode starts (deep in the horizontal arm)
+        self.goal_depth = goal_depth if goal_depth is not None else self.arm_length / 2
+        if not (0 < self.goal_depth < self.arm_length):
+            raise ValueError("goal_depth must satisfy 0 < goal_depth < arm_length")
+        self.goal_region = box(0.0, -self.arm_length, corridor_width, -self.goal_depth)
         self.max_steps = max_steps
         self.max_dxy = max_dxy
         self.max_dtheta = max_dtheta
         self.collision_mode = collision_mode
-        self.reward_fn = reward_fn or default_reward_fn
+        self.reward_fn = reward_fn
         self.render_mode = render_mode
+
+        cell_size = corridor_width / geodesic_resolution
+        self._geo_field = geodesic.build_geodesic_field(
+            width=corridor_width,
+            arm_length=self.arm_length,
+            goal_depth=self.goal_depth,
+            cell_size=cell_size,
+        )
+        self._geo_dist_start = 1.0  # overwritten in reset()
 
         self.action_space = spaces.Box(
             low=np.array([-max_dxy, -max_dxy, -max_dtheta], dtype=np.float32),
             high=np.array([max_dxy, max_dxy, max_dtheta], dtype=np.float32),
         )
-        # Raw pose, unclipped and unbounded -- theta can wind past +/-pi or
-        # go negative; nothing here tells the agent what "forward" means.
+        # [x_norm, y_norm, sin(theta), cos(theta), time_left_norm, geo_dist_norm]
+        # theta itself stays raw/unbounded internally (periodic, unclipped --
+        # see module docstring); sin/cos give the agent a periodic-safe view.
         self.observation_space = spaces.Box(
-            low=np.array([-np.inf, -np.inf, -np.inf], dtype=np.float32),
-            high=np.array([np.inf, np.inf, np.inf], dtype=np.float32),
+            low=np.array([-2.0, -2.0, -1.0, -1.0, 0.0, 0.0], dtype=np.float32),
+            high=np.array([2.0, 2.0, 1.0, 1.0, 1.0, np.inf], dtype=np.float32),
         )
 
         self.pose = np.zeros(3, dtype=np.float64)  # x, y, theta
@@ -100,8 +118,25 @@ class SofaEnv(gym.Env):
     def _reached_goal(self, poly: Polygon) -> bool:
         return self.goal_region.contains(poly)
 
+    def _geodesic_dist(self) -> float:
+        x, y, _ = self.pose
+        return geodesic.query(self._geo_field, x, y)
+
     def _get_obs(self) -> np.ndarray:
-        return self.pose.astype(np.float32)
+        x, y, theta = self.pose
+        time_left_norm = 1.0 - self.step_count / self.max_steps
+        geo_dist_norm = self._geodesic_dist() / self._geo_dist_start
+        return np.array(
+            [
+                x / self.arm_length,
+                y / self.arm_length,
+                np.sin(theta),
+                np.cos(theta),
+                time_left_norm,
+                geo_dist_norm,
+            ],
+            dtype=np.float32,
+        )
 
     def reset(self, *, seed=None, options=None):
         super().reset(seed=seed)
@@ -110,6 +145,7 @@ class SofaEnv(gym.Env):
         start_y = options.get("start_y", self.corridor_width / 2)
         self.pose = np.array([start_x, start_y, 0.0], dtype=np.float64)
         self.step_count = 0
+        self._geo_dist_start = max(self._geodesic_dist(), 1e-6)
 
         obs = self._get_obs()
         info = {"colliding": not self._is_contained(self._posed_polygon())}
@@ -145,7 +181,11 @@ class SofaEnv(gym.Env):
         )
 
         obs = self._get_obs()
-        info = {"colliding": collided, "success": success}
+        info = {
+            "colliding": collided,
+            "success": success,
+            "geodesic_dist": self._geodesic_dist(),
+        }
         return obs, reward, terminated, truncated, info
 
     def render(self, save_path: Optional[str] = None):
