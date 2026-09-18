@@ -45,6 +45,11 @@ class SofaEnv(gym.Env):
         render_mode: Optional[str] = None,
     ):
         super().__init__()
+        if reward_fn is None:
+            raise ValueError(
+                "reward_fn is required -- SofaEnv has no default reward. "
+                "Pass a callable accepting prev_pose, new_pose, collided, success."
+            )
         base_shape = (
             shape if isinstance(shape, Polygon) else polygon_from_points(shape)
         )
@@ -73,7 +78,7 @@ class SofaEnv(gym.Env):
         self.max_dxy = max_dxy
         self.max_dtheta = max_dtheta
         self.collision_mode = collision_mode
-        self.reward_fn = reward_fn
+        self.reward_fn: RewardFn = reward_fn
         self.render_mode = render_mode
 
         cell_size = corridor_width / geodesic_resolution
