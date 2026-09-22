@@ -40,12 +40,12 @@ class RolloutBuffer:
     ) -> None:
         if self.full:
             raise RuntimeError("RolloutBuffer is full; reset() before adding more")
-        self.obs[self.pos] = obs
-        self.actions[self.pos] = action
-        self.rewards[self.pos] = reward
-        self.values[self.pos] = value
-        self.log_probs[self.pos] = log_prob
-        self.dones[self.pos] = float(done)
+        self.obs[self.pos] = obs            # single: (obs_dim,), batch: (buffer_size, obs_dim)
+        self.actions[self.pos] = action     # single: (action_dim,), batch: (buffer_size, action_dim)
+        self.rewards[self.pos] = reward     # single: (), batch: (buffer_size,)
+        self.values[self.pos] = value       # single: (), batch: (buffer_size,)
+        self.log_probs[self.pos] = log_prob # single: (), batch: (buffer_size,)
+        self.dones[self.pos] = float(done)  # single: (), batch: (buffer_size,)
         self.pos += 1
 
     def reset(self) -> None:

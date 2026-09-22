@@ -10,7 +10,6 @@ class ValueCritic(nn.Module):
     def __init__(self, obs_dim: int, hidden_dim: int=64):
         super().__init__()
         self.obs_dim = obs_dim
-        self.output
 
         self.net = nn.Sequential(
             nn.Linear(obs_dim, hidden_dim), nn.Tanh(),
