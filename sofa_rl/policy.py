@@ -26,7 +26,8 @@ class ActorPolicy(nn.Module, ABC):
 
         Returns (action, log_prob), each shape (batch, ...).
         """
-        
+        raise NotImplementedError
+
 
     @abstractmethod
     def evaluate_actions(self, obs: torch.Tensor, actions: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -35,6 +36,7 @@ class ActorPolicy(nn.Module, ABC):
         Returns (log_prob, entropy), each shape (batch,).
         """
         raise NotImplementedError
+
 
     @abstractmethod
     def predict(self, obs: torch.Tensor, deterministic: bool = False) -> torch.Tensor:
