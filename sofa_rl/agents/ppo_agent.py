@@ -1,10 +1,8 @@
-"""PPO agent: owns the policy, critic, buffer, and optimizers, and exposes
-the two operations the training loop alternates between. No rollout,
-advantage, or update math is implemented here
-"""
+"""PPO agent"""
+
 from __future__ import annotations
 
-from typing import Dict
+from typing import Dict, List
 
 import gymnasium as gym
 import torch
@@ -64,7 +62,7 @@ class PPOAgent:
 
         return {"return": episode_return, "length": steps, "success": float(info["success"])}
 
-    def collect_rollout(self) -> None:
+    def collect_rollout(self) -> List[Dict[str, float]]:
         """Call rollout_episode repeatedly (each starting from a fresh
         self.env.reset()) until self.buffer has at least self.steps_per_batch
         steps. No episode is cut off mid-way: the last rollout_episode()
@@ -72,6 +70,12 @@ class PPOAgent:
         steps_per_batch.
         """
         self.buffer.reset()
+        episodes = []
+
+        while not len(self.buffer) >= self.steps_per_batch:
+            episodes.append(self.rollout_episode())
+        
+        return episodes
 
     def update(self) -> Dict[str, float]:
         """Run PPO's minibatch epochs over self.buffer, then self.buffer.reset().
