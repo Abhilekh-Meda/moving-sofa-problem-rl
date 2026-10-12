@@ -25,14 +25,16 @@ class RolloutBuffer:
         reward: float,
         value: torch.Tensor,
         log_prob: torch.Tensor,
-        done: bool,
+        truncated: bool,
+        terminated: bool,
     ) -> None:
         self.obs.append(obs)
         self.actions.append(action)
         self.rewards.append(reward)
         self.values.append(value)
         self.log_probs.append(log_prob)
-        self.dones.append(float(done))
+        self.truncateds.append(float(truncated))
+        self.terminateds.append(float(terminated))
 
     def reset(self) -> None:
         self.obs = []
@@ -40,4 +42,8 @@ class RolloutBuffer:
         self.rewards = []
         self.values = []
         self.log_probs = []
-        self.dones = []
+        self.truncateds = []
+        self.terminateds = []
+    
+    def get(self):
+        return self.obs, self.actions, self.rewards, self.values, self.log_probs, self.terminateds, self.truncateds

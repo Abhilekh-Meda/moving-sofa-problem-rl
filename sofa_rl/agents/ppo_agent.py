@@ -8,6 +8,7 @@ import gymnasium as gym
 import torch
 
 from ..buffer import RolloutBuffer
+from ..gae import compute_gae
 from ..networks.critic import ValueCritic
 from ..policy import ActorPolicy
 
@@ -31,7 +32,7 @@ class PPOAgent:
         self.critic_optimizer = critic_optimizer
         self.steps_per_batch = steps_per_batch
 
-    def rollout_episode(self) -> Dict[str, float]:
+    def _rollout_episode(self) -> Dict[str, float]:
         """Run one full episode with self.policy, adding each step to
         self.buffer.
 
@@ -55,7 +56,7 @@ class PPOAgent:
             
             next_obs, reward, terminated, truncated, info = self.env.step(action_np)
             done = terminated or truncated
-            self.buffer.add(obs_tensor.squeeze(0), action.squeeze(0), reward, value.squeeze(), log_prob.squeeze(), done)
+            self.buffer.add(obs_tensor.squeeze(0), action.squeeze(0), reward, value.squeeze(), log_prob.squeeze(), truncated, terminated)
             obs = next_obs
             episode_return += reward
             steps += 1
@@ -73,7 +74,7 @@ class PPOAgent:
         episodes = []
 
         while not len(self.buffer) >= self.steps_per_batch:
-            episodes.append(self.rollout_episode())
+            episodes.append(self._rollout_episode())
         
         return episodes
 
@@ -86,4 +87,12 @@ class PPOAgent:
         clipped surrogate loss, value loss, and entropy bonus; step both
         optimizers. Return a dict of stats (e.g. losses) for logging.
         """
-        raise NotImplementedError
+        obs, actions, rewards, values, log_probs, terminateds, truncateds = self.buffer.get()
+        obs_t = torch.stack(obs) # (B, obs_dim)
+        actions_t = torch.stack(actions) # (B, action_dim)
+        rewards_t = torch.tensor(rewards).unsquueze(-1) # (B, 1)
+        values_t = torch.stack(values).unsqueeze(-1) # (B, 1)
+        log_probs_t = torch.stack(log_probs).unsqueeze(-1) # (B, 1)
+        terminateds_t = torch.tensor(terminateds).unsqueeze(-1)
+        truncateds_t = torch.tensor(truncateds).unsqueeze(-1)
+
