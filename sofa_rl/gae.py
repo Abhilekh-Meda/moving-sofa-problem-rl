@@ -32,4 +32,6 @@ def compute_gae(
         advantages[t] = gae
 
     returns = advantages + values
-    return advantages, returns
+    normalized_advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+
+    return advantages, normalized_advantages, returns
