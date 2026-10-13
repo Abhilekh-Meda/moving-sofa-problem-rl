@@ -42,7 +42,7 @@ class PPOAgent:
         Starts with self.env.reset(). For each step: self.policy.act(obs)
         for (action, log_prob), self.critic(obs) for value, step self.env,
         self.buffer.add(...). Runs until the episode terminates or truncates.
-        Returns episode stats: {"return", "length", "success"}.
+        Returns episode stats: {"return", "length", "success", "final_geo_dist"}.
         """
         obs, _ = self.env.reset()
         done = False
@@ -64,7 +64,12 @@ class PPOAgent:
             episode_return += reward
             steps += 1
 
-        return {"return": episode_return, "length": steps, "success": float(info["success"])}
+        return {
+            "return": episode_return,
+            "length": steps,
+            "success": float(info["success"]),
+            "final_geo_dist": float(info["geodesic_dist"]),
+        }
 
     def collect_rollout(self) -> List[Dict[str, float]]:
         """Call rollout_episode repeatedly (each starting from a fresh
@@ -100,6 +105,9 @@ class PPOAgent:
 
         advantages, normalized_advantages, returns = compute_gae(rewards_t, values_t, dones_t) # all are (B,)
 
+        explained_variance = 1.0 - (returns - values_t).var() / (returns.var() + 1e-8)
+        stats = {"policy_loss": [], "value_loss": [], "entropy": [], "approx_kl": [], "clip_fraction": []}
+
         B = len(obs_t)
         for epoch in range(self.cfg.epochs):
             perm = torch.randperm(B)
@@ -125,6 +133,13 @@ class PPOAgent:
                 value = self.critic(obs_mb).squeeze(-1)
                 value_loss = ((value - returns_mb) ** 2).mean()
 
+                # logging stats
+                stats["policy_loss"].append(policy_loss.item())
+                stats["value_loss"].append(value_loss.item())
+                stats["entropy"].append(entropy.mean().item())
+                stats["approx_kl"].append((old_log_probs_mb - new_log_probs).mean().item())
+                stats["clip_fraction"].append(((ratio - 1).abs() > self.cfg.clip_eps).float().mean().item())
+
                 # gradient steps
                 self.actor_optimizer.zero_grad()
                 policy_loss.backward()
@@ -136,5 +151,18 @@ class PPOAgent:
             
         self.buffer.reset()
 
-        # TODO: return training stats
-        
+        result = {k: sum(v) / len(v) for k, v in stats.items()}
+        result["explained_variance"] = explained_variance.item()
+        result["policy_std"] = self.policy.actor.log_std.exp().mean().item()
+        return result
+
+
+def summarize_episodes(episodes: List[Dict[str, float]]) -> Dict[str, float]:
+    """Average per-episode stats from collect_rollout() into one dict."""
+    n = len(episodes)
+    summary = {f"mean_{k}": sum(e[k] for e in episodes) / n for k in episodes[0]}
+    summary["success_rate"] = summary.pop("mean_success")
+    summary["num_episodes"] = n
+    summary["num_steps"] = sum(e["length"] for e in episodes)
+    return summary
+    
