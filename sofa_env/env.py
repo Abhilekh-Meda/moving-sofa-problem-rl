@@ -148,7 +148,8 @@ class SofaEnv(gym.Env):
         options = options or {}
         start_x = options.get("start_x", -self.arm_length / 2)
         start_y = options.get("start_y", self.corridor_width / 2)
-        self.pose = np.array([start_x, start_y, 0.0], dtype=np.float64)
+        start_theta = options.get("start_theta", 0.0)
+        self.pose = np.array([start_x, start_y, start_theta], dtype=np.float64)
         self.step_count = 0
         self._geo_dist_start = max(self._geodesic_dist(), 1e-6)
 
