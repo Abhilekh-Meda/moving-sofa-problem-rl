@@ -88,7 +88,15 @@ class SofaEnv(gym.Env):
             goal_depth=self.goal_depth,
             cell_size=cell_size,
         )
-        self._geo_dist_start = 1.0  # overwritten in reset()
+        # normalizer: distance from the default start, not from wherever
+        # a given episode begins, so geo_dist_norm means the same thing in
+        # every episode regardless of reset options.
+        self._geo_dist_start = max(
+            geodesic.query(
+                self._geo_field, -self.arm_length / 2, corridor_width / 2
+            ),
+            1e-6,
+        )
 
         self.action_space = spaces.Box(
             low=np.array([-max_dxy, -max_dxy, -max_dtheta], dtype=np.float32),
@@ -151,7 +159,6 @@ class SofaEnv(gym.Env):
         start_theta = options.get("start_theta", 0.0)
         self.pose = np.array([start_x, start_y, start_theta], dtype=np.float64)
         self.step_count = 0
-        self._geo_dist_start = max(self._geodesic_dist(), 1e-6)
 
         obs = self._get_obs()
         info = {"colliding": not self._is_contained(self._posed_polygon())}

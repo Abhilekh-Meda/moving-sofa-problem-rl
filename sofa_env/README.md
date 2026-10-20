@@ -38,11 +38,17 @@ however much, however often, in whatever direction.
 | 2     | `sin(theta)`     | `[-1, 1]`  | periodic-safe heading                                                                                             |
 | 3     | `cos(theta)`     | `[-1, 1]`  | periodic-safe heading                                                                                             |
 | 4     | `time_left_norm` | `[0, 1]`   | `1 - step_count / max_steps`                                                                                      |
-| 5     | `geo_dist_norm`  | `[0, inf)` | corner-aware geodesic distance to goal, normalized by the distance at episode start (see Geodesic distance below) |
+| 5     | `geo_dist_norm`  | `[0, inf)` | corner-aware geodesic distance to goal, divided by its value at the default start (see Geodesic distance below)   |
 
 
 `theta` itself is unbounded and not clipped internally (it's periodic) —
 `sin`/`cos` are what the agent actually sees.
+
+`geo_dist_norm` uses a fixed normalizer: the geodesic distance from the
+default start pose, computed once at construction. It does not depend on
+where a given episode starts, so a pose maps to the same value in every
+episode. It is 1.0 at the default start, 0 inside the goal region, and
+greater than 1 for poses farther from the goal than the default start.
 
 ## Pose
 
@@ -59,9 +65,12 @@ Returns `(obs, info)`.
 
 - `start_x` (default `-arm_length / 2`)
 - `start_y` (default `corridor_width / 2`)
+- `start_theta` (default `0.0`, radians)
 
-`info` on reset: `{"colliding": bool}` — whether the starting pose is
-already outside the corridor (only possible with a non-default start).
+The start pose is not validated: `reset()` accepts any pose and reports
+whether it is outside the corridor. `info` on reset: `{"colliding": bool}`
+(only possible with a non-default start). A caller choosing its own start
+poses should check this flag and pick another pose if it is set.
 
 ## `step(action)`
 
@@ -130,7 +139,8 @@ horizontal arm: x in [-arm_length, width], y in [0, width]
 vertical arm:   x in [0, width],            y in [-arm_length, width]
 ```
 
-Episodes start deep in the horizontal arm (`x = -arm_length/2` by default)
+Episodes start deep in the horizontal arm by default (`x = -arm_length/2`,
+`y = width/2`, `theta = 0`; see `reset()` options to start elsewhere)
 and the goal is deep in the vertical arm (`y <= -goal_depth`) — the shape
 must turn the corner.
 
@@ -147,6 +157,11 @@ Dijkstra flood from the goal cells, restricted to in-corridor cells — this
 respects the L-shape. Built once per env (`geodesic_resolution` controls
 grid fineness), queried in O(1) per step via nearest-cell lookup
 (`geodesic.query`).
+
+The distance is measured from the shape's centre `(x, y)` only and does
+not depend on `theta`. The observation divides it by the distance from the
+default start pose (see `geo_dist_norm` above); `info["geodesic_dist"]`
+from `step()` is the raw, unnormalized value.
 
 ## Rendering (`rendering.py`)
 
