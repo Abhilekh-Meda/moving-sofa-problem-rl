@@ -102,7 +102,7 @@ class PPOAgent:
         log_probs_t = torch.stack(log_probs) # (B,)
         dones_t = torch.logical_or(torch.tensor(terminateds), torch.tensor(truncateds)).float()
 
-        advantages, normalized_advantages, returns = compute_gae(rewards_t, values_t, dones_t) # all are (B,)
+        advantages, normalized_advantages, returns = compute_gae(rewards_t, values_t, dones_t, gamma=self.cfg.gamma, lam=self.cfg.lam) # all are (B,)
 
         explained_variance = 1.0 - (returns - values_t).var() / (returns.var() + 1e-8)
         stats = {"policy_loss": [], "value_loss": [], "entropy": [], "approx_kl": [], "clip_fraction": []}

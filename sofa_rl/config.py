@@ -7,3 +7,4 @@ class PPOConfig:
     epochs: int = 10
     minibatch_size: int = 64
     entropy_coef: float = 0.0
+    gamma: float = 1.0
