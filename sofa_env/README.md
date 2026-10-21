@@ -38,14 +38,14 @@ however much, however often, in whatever direction.
 | 2     | `sin(theta)`     | `[-1, 1]`  | periodic-safe heading                                                                                             |
 | 3     | `cos(theta)`     | `[-1, 1]`  | periodic-safe heading                                                                                             |
 | 4     | `time_left_norm` | `[0, 1]`   | `1 - step_count / max_steps`                                                                                      |
-| 5     | `geo_dist_norm`  | `[0, inf)` | geodesic distance from the shape's centre to goal, divided by its value at the default start (see Geodesic distance below) |
+| 5     | `geo_dist_norm`  | `[0, inf)` | shape's distance to goal, divided by its value at the default start (see Distance to goal below)                  |
 
 
 `theta` itself is unbounded and not clipped internally (it's periodic) —
 `sin`/`cos` are what the agent actually sees.
 
-`geo_dist_norm` uses a fixed normalizer: the geodesic distance from the
-default start pose, computed once at construction. It does not depend on
+`geo_dist_norm` uses a fixed normalizer: the shape's distance to the goal
+at the default start pose, computed once at construction. It does not depend on
 where a given episode starts, so a pose maps to the same value in every
 episode. It is 1.0 at the default start, 0 inside the goal region, and
 greater than 1 for poses farther from the goal than the default start.
@@ -86,8 +86,8 @@ inside the goal region, no partial-overlap credit.
 - `terminated = success or (collided and collision_mode == "terminate")`.
 - `truncated = step_count >= max_steps`.
 - `info`: `{"colliding": bool, "success": bool, "geodesic_dist": float}`.
-`geodesic_dist` is the raw (unnormalized) geodesic distance from the shape's
-centre to the goal at the current pose.
+`geodesic_dist` is the shape's raw (unnormalized) distance to goal at the
+current pose.
 
 
 
@@ -103,8 +103,8 @@ without one. Called every step with:
 
 | kwarg       | type              | meaning                                                                    |
 | ----------- | ----------------- | -------------------------------------------------------------------------- |
-| `prev_dist` | `float`           | raw geodesic distance from the shape's centre to goal at `prev_pose`       |
-| `new_dist`  | `float`           | raw geodesic distance from the shape's centre to goal at `new_pose`        |
+| `prev_dist` | `float`           | shape's raw distance to goal at `prev_pose` (see Distance to goal below)   |
+| `new_dist`  | `float`           | shape's raw distance to goal at `new_pose`                                 |
 | `prev_pose` | `np.ndarray (3,)` | pose before this step                                                      |
 | `new_pose`  | `np.ndarray (3,)` | pose after this step (post-clip, post-collision-handling)                  |
 | `collided`  | `bool`            | whether the new pose left the corridor                                     |
@@ -126,6 +126,7 @@ yet).
 | `max_dxy`             | `0.05`               | per-step translation bound (both x and y)                                                                                              |
 | `max_dtheta`          | `0.05`               | per-step rotation bound (radians)                                                                                                      |
 | `collision_mode`      | `"terminate"`        | `"terminate"` or `"reject"` (see `step()` above)                                                                                       |
+| `boundary_spacing`    | `0.025`              | spacing of the boundary points used for the distance to goal, as a fraction of `corridor_width`                                       |
 | `reward_fn`           | required             | see above                                                                                                                              |
 | `render_mode`         | `None`               | `"human"` or `"rgb_array"`                                                                                                             |
 
@@ -151,13 +152,14 @@ continuous sweep between consecutive steps — a fast-rotating/translating
 shape could in principle clip through a wall between two sampled poses
 without being detected. Noted as a known limitation in `env.py`.
 
-## Geodesic distance (`geodesic.py`)
+## Distance to goal (`geodesic.py`, `SofaEnv._geodesic_shape_dist`)
 
-Straight-line distance to the goal cuts through the corner wall for points
-in different arms. The geodesic distance (shortest path that stays in the
-corridor) bends only at reflex vertices, and the L-corridor has one, the
-inner corner at (0, 0). So `geodesic.corridor_geodesic(pts, goal_depth)`
-computes it exactly in closed form for points of shape `(P, 2)`:
+**Point distance.** Straight-line distance to the goal cuts through the
+corner wall for points in different arms. The geodesic distance (shortest
+path that stays in the corridor) bends only at reflex vertices, and the
+L-corridor has one, the inner corner at (0, 0). So
+`geodesic.corridor_geodesic(pts, goal_depth)` computes it exactly in closed
+form for points of shape `(P, 2)`:
 
 ```
 x >= 0 (vertical arm, corner square):  max(0, y + goal_depth)   # straight down
@@ -168,10 +170,17 @@ The two branches agree along the opening `x = 0, y >= 0`, so the distance
 is continuous everywhere in the corridor. It is specific to this L-corridor
 geometry.
 
-The distance is measured from the shape's centre `(x, y)` only and does
-not depend on `theta`. The observation divides it by the distance from the
-default start pose (see `geo_dist_norm` above); `info["geodesic_dist"]`
-from `step()` is the raw, unnormalized value.
+**Shape distance.** The shape's distance to the goal is the mean of
+`corridor_geodesic` over points spaced `boundary_spacing * corridor_width`
+apart along the shape's boundary (computed once from `base_shape`, then
+posed each step). Using the whole boundary rather than the centroid means:
+
+- it reflects where the shape actually is, including non-convex shapes
+whose centroid can lie outside the shape (and so inside a wall) at a
+valid pose;
+- it depends on `theta`, not only on `(x, y)`;
+- it is 0 exactly when every boundary point is in the goal region, i.e.
+the whole shape is in the goal.
 
 ## Rendering (`rendering.py`)
 

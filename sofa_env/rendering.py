@@ -46,7 +46,7 @@ def render_frame(env, save_path: Optional[str] = None):
     ax.set_ylim(-L * 0.55, w * 1.5)
     ax.set_aspect("equal")
     x, y, theta = env.pose
-    geo_dist = env._geodesic_dist()
+    geo_dist = env._geodesic_shape_dist()
     ax.set_title(
         f"x={x:.2f} y={y:.2f} theta={theta:.2f} rad geo={geo_dist:.2f}"
         + ("  COLLIDING" if colliding else "")

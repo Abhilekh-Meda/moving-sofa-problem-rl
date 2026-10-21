@@ -40,6 +40,7 @@ class SofaEnv(gym.Env):
         max_dxy: float = 0.05,
         max_dtheta: float = 0.05,
         collision_mode: str = "terminate",
+        boundary_spacing: float = 0.025,
         reward_fn: Optional[RewardFn] = None,
         render_mode: Optional[str] = None,
     ):
@@ -81,11 +82,19 @@ class SofaEnv(gym.Env):
         self.reward_fn: RewardFn = reward_fn
         self.render_mode = render_mode
 
+        # Distance-to-goal is measured over points spaced along the shape's
+        # boundary (local frame), not at the centroid: a non-convex shape's
+        # centroid can lie outside the shape, and so inside a wall, at a
+        # valid pose, while its boundary points stay in the corridor.
+        ring = self.base_shape.exterior
+        arc = np.arange(0.0, ring.length, boundary_spacing * corridor_width)
+        self._boundary_pts = np.array([ring.interpolate(d).coords[0] for d in arc])
+
         # normalizer: distance from the default start, not from wherever
         # a given episode begins, so geo_dist_norm means the same thing in
         # every episode regardless of reset options.
         default_start = np.array([-self.arm_length / 2, corridor_width / 2, 0.0])
-        self._geo_dist_start = max(self._geodesic_dist(default_start), 1e-6)
+        self._geo_dist_start = max(self._geodesic_shape_dist(default_start), 1e-6)
 
         self.action_space = spaces.Box(
             low=np.array([-max_dxy, -max_dxy, -max_dtheta], dtype=np.float32),
@@ -120,15 +129,21 @@ class SofaEnv(gym.Env):
     def _reached_goal(self, poly: Polygon) -> bool:
         return self.goal_region.contains(poly)
 
-    def _geodesic_dist(self, pose: Optional[np.ndarray] = None) -> float:
+    def _geodesic_shape_dist(self, pose: Optional[np.ndarray] = None) -> float:
+        """Mean geodesic distance to the goal over the posed boundary points.
+
+        0 exactly when the whole boundary is in the goal region.
+        """
         pose = self.pose if pose is None else pose
-        x, y, _ = pose
-        return float(geodesic.corridor_geodesic(np.array([[x, y]]), self.goal_depth)[0])
+        x, y, theta = pose
+        c, s = np.cos(theta), np.sin(theta)
+        pts = self._boundary_pts @ np.array([[c, s], [-s, c]]) + (x, y)
+        return float(geodesic.corridor_geodesic(pts, self.goal_depth).mean())
 
     def _get_obs(self) -> np.ndarray:
         x, y, theta = self.pose
         time_left_norm = 1.0 - self.step_count / self.max_steps
-        geo_dist_norm = self._geodesic_dist() / self._geo_dist_start
+        geo_dist_norm = self._geodesic_shape_dist() / self._geo_dist_start
         return np.array(
             [
                 x / self.arm_length,
@@ -177,8 +192,8 @@ class SofaEnv(gym.Env):
         truncated = self.step_count >= self.max_steps
 
         reward = self.reward_fn(
-            prev_dist=self._geodesic_dist(prev_pose),
-            new_dist=self._geodesic_dist(self.pose),
+            prev_dist=self._geodesic_shape_dist(prev_pose),
+            new_dist=self._geodesic_shape_dist(self.pose),
             prev_pose=prev_pose,
             new_pose=self.pose,
             collided=collided,
@@ -189,7 +204,7 @@ class SofaEnv(gym.Env):
         info = {
             "colliding": collided,
             "success": success,
-            "geodesic_dist": self._geodesic_dist(),
+            "geodesic_dist": self._geodesic_shape_dist(),
         }
         return obs, reward, terminated, truncated, info
 
