@@ -38,7 +38,7 @@ however much, however often, in whatever direction.
 | 2     | `sin(theta)`     | `[-1, 1]`  | periodic-safe heading                                                                                             |
 | 3     | `cos(theta)`     | `[-1, 1]`  | periodic-safe heading                                                                                             |
 | 4     | `time_left_norm` | `[0, 1]`   | `1 - step_count / max_steps`                                                                                      |
-| 5     | `geo_dist_norm`  | `[0, inf)` | corner-aware geodesic distance to goal, divided by its value at the default start (see Geodesic distance below)   |
+| 5     | `geo_dist_norm`  | `[0, inf)` | geodesic distance from the shape's centre to goal, divided by its value at the default start (see Geodesic distance below) |
 
 
 `theta` itself is unbounded and not clipped internally (it's periodic) —
@@ -86,26 +86,29 @@ inside the goal region, no partial-overlap credit.
 - `terminated = success or (collided and collision_mode == "terminate")`.
 - `truncated = step_count >= max_steps`.
 - `info`: `{"colliding": bool, "success": bool, "geodesic_dist": float}`.
+`geodesic_dist` is the raw (unnormalized) geodesic distance from the shape's
+centre to the goal at the current pose.
 
 
 
 ## `reward_fn` (required — no default)
 
 ```python
-RewardFn = Callable[..., float]  # keyword args: prev_pose, new_pose, collided, success
+RewardFn = Callable[..., float]  # keyword args: prev_dist, new_dist, prev_pose, new_pose, collided, success
 ```
 
 Must be supplied at construction; `SofaEnv(...)` raises `ValueError`
 without one. Called every step with:
 
 
-| kwarg       | type              | meaning                                                   |
-| ----------- | ----------------- | --------------------------------------------------------- |
-| `prev_pose` | `np.ndarray (3,)` | pose before this step                                     |
-| `new_pose`  | `np.ndarray (3,)` | pose after this step (post-clip, post-collision-handling) |
-| `collided`  | `bool`            | whether the new pose left the corridor                    |
-| `success`   | `bool`            | whether the new pose is fully inside the goal region      |
-
+| kwarg       | type              | meaning                                                                    |
+| ----------- | ----------------- | -------------------------------------------------------------------------- |
+| `prev_dist` | `float`           | raw geodesic distance from the shape's centre to goal at `prev_pose`       |
+| `new_dist`  | `float`           | raw geodesic distance from the shape's centre to goal at `new_pose`        |
+| `prev_pose` | `np.ndarray (3,)` | pose before this step                                                      |
+| `new_pose`  | `np.ndarray (3,)` | pose after this step (post-clip, post-collision-handling)                  |
+| `collided`  | `bool`            | whether the new pose left the corridor                                     |
+| `success`   | `bool`            | whether the new pose is fully inside the goal region                       |
 
 See `sofa_env/rewards.py` (currently empty — no reward functions defined
 yet).
@@ -123,7 +126,6 @@ yet).
 | `max_dxy`             | `0.05`               | per-step translation bound (both x and y)                                                                                              |
 | `max_dtheta`          | `0.05`               | per-step rotation bound (radians)                                                                                                      |
 | `collision_mode`      | `"terminate"`        | `"terminate"` or `"reject"` (see `step()` above)                                                                                       |
-| `geodesic_resolution` | `40`                 | grid cells per unit of `corridor_width` for the geodesic distance field                                                                |
 | `reward_fn`           | required             | see above                                                                                                                              |
 | `render_mode`         | `None`               | `"human"` or `"rgb_array"`                                                                                                             |
 
@@ -152,11 +154,19 @@ without being detected. Noted as a known limitation in `env.py`.
 ## Geodesic distance (`geodesic.py`)
 
 Straight-line distance to the goal cuts through the corner wall for points
-in different arms, so `geo_dist_norm` instead uses a grid-based multi-source
-Dijkstra flood from the goal cells, restricted to in-corridor cells — this
-respects the L-shape. Built once per env (`geodesic_resolution` controls
-grid fineness), queried in O(1) per step via nearest-cell lookup
-(`geodesic.query`).
+in different arms. The geodesic distance (shortest path that stays in the
+corridor) bends only at reflex vertices, and the L-corridor has one, the
+inner corner at (0, 0). So `geodesic.corridor_geodesic(pts, goal_depth)`
+computes it exactly in closed form for points of shape `(P, 2)`:
+
+```
+x >= 0 (vertical arm, corner square):  max(0, y + goal_depth)   # straight down
+x <  0 (horizontal arm):               hypot(x, y) + goal_depth  # to the corner, then down
+```
+
+The two branches agree along the opening `x = 0, y >= 0`, so the distance
+is continuous everywhere in the corridor. It is specific to this L-corridor
+geometry.
 
 The distance is measured from the shape's centre `(x, y)` only and does
 not depend on `theta`. The observation divides it by the distance from the

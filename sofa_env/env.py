@@ -40,7 +40,6 @@ class SofaEnv(gym.Env):
         max_dxy: float = 0.05,
         max_dtheta: float = 0.05,
         collision_mode: str = "terminate",
-        geodesic_resolution: int = 40,
         reward_fn: Optional[RewardFn] = None,
         render_mode: Optional[str] = None,
     ):
@@ -48,7 +47,8 @@ class SofaEnv(gym.Env):
         if reward_fn is None:
             raise ValueError(
                 "reward_fn is required -- SofaEnv has no default reward. "
-                "Pass a callable accepting prev_pose, new_pose, collided, success."
+                "Pass a callable accepting prev_dist, new_dist, prev_pose, "
+                "new_pose, collided, success."
             )
         base_shape = (
             shape if isinstance(shape, Polygon) else polygon_from_points(shape)
@@ -81,22 +81,11 @@ class SofaEnv(gym.Env):
         self.reward_fn: RewardFn = reward_fn
         self.render_mode = render_mode
 
-        cell_size = corridor_width / geodesic_resolution
-        self._geo_field = geodesic.build_geodesic_field(
-            width=corridor_width,
-            arm_length=self.arm_length,
-            goal_depth=self.goal_depth,
-            cell_size=cell_size,
-        )
         # normalizer: distance from the default start, not from wherever
         # a given episode begins, so geo_dist_norm means the same thing in
         # every episode regardless of reset options.
-        self._geo_dist_start = max(
-            geodesic.query(
-                self._geo_field, -self.arm_length / 2, corridor_width / 2
-            ),
-            1e-6,
-        )
+        default_start = np.array([-self.arm_length / 2, corridor_width / 2, 0.0])
+        self._geo_dist_start = max(self._geodesic_dist(default_start), 1e-6)
 
         self.action_space = spaces.Box(
             low=np.array([-max_dxy, -max_dxy, -max_dtheta], dtype=np.float32),
@@ -131,9 +120,10 @@ class SofaEnv(gym.Env):
     def _reached_goal(self, poly: Polygon) -> bool:
         return self.goal_region.contains(poly)
 
-    def _geodesic_dist(self) -> float:
-        x, y, _ = self.pose
-        return geodesic.query(self._geo_field, x, y)
+    def _geodesic_dist(self, pose: Optional[np.ndarray] = None) -> float:
+        pose = self.pose if pose is None else pose
+        x, y, _ = pose
+        return float(geodesic.corridor_geodesic(np.array([[x, y]]), self.goal_depth)[0])
 
     def _get_obs(self) -> np.ndarray:
         x, y, theta = self.pose
@@ -187,6 +177,8 @@ class SofaEnv(gym.Env):
         truncated = self.step_count >= self.max_steps
 
         reward = self.reward_fn(
+            prev_dist=self._geodesic_dist(prev_pose),
+            new_dist=self._geodesic_dist(self.pose),
             prev_pose=prev_pose,
             new_pose=self.pose,
             collided=collided,
