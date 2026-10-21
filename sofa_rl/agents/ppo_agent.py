@@ -42,7 +42,7 @@ class PPOAgent:
         Starts with self.env.reset(). For each step: self.policy.act(obs)
         for (action, log_prob), self.critic(obs) for value, step self.env,
         self.buffer.add(...). Runs until the episode terminates or truncates.
-        Returns episode stats: {"return", "length", "success", "final_geo_dist"}.
+        Returns episode stats: {"return", "length", "final_area"}.
         """
         obs, _ = self.env.reset()
         done = False
@@ -67,8 +67,7 @@ class PPOAgent:
         return {
             "return": episode_return,
             "length": steps,
-            "success": float(info["success"]),
-            "final_geo_dist": float(info["geodesic_dist"]),
+            "final_area": float(info["area"]),
         }
 
     def collect_rollout(self) -> List[Dict[str, float]]:
@@ -161,7 +160,6 @@ def summarize_episodes(episodes: List[Dict[str, float]]) -> Dict[str, float]:
     """Average per-episode stats from collect_rollout() into one dict."""
     n = len(episodes)
     summary = {f"mean_{k}": sum(e[k] for e in episodes) / n for k in episodes[0]}
-    summary["success_rate"] = summary.pop("mean_success")
     summary["num_episodes"] = n
     summary["num_steps"] = sum(e["length"] for e in episodes)
     return summary
