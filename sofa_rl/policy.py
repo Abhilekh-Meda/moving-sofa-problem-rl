@@ -1,4 +1,4 @@
-"""Policy interface for PPO on SofaEnv.
+"""Policy interface for PPO.
 """
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ class ActorPolicy(nn.Module, ABC):
     """Action-selection wrapper around an actor network.
 
     obs and action tensors are always batched, shape (batch, obs_dim) and
-    (batch, action_dim), matching SofaEnv's Box observation/action spaces.
+    (batch, action_dim), matching the env's Box observation/action spaces.
     """
 
     def __init__(self, actor: nn.Module):
