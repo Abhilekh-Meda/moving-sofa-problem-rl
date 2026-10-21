@@ -6,4 +6,4 @@ class PPOConfig:
     clip_eps: float = 0.2
     epochs: int = 10
     minibatch_size: int = 64
-    entropy_coef = 0.0
+    entropy_coef: float = 0.0
