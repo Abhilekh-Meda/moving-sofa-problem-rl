@@ -2,7 +2,9 @@
 
 Runs are written to the Modal volume `sofa-runs` with the same layout as local
 runs/ (<sweep>/<setting>_seed<s>/). Runs already complete in the volume are
-skipped, so a sweep can be relaunched with the same command.
+skipped, so a sweep can be relaunched with the same command. Each run also logs
+live to W&B (project sofa-rl, grouped by sweep) using the Modal secret `wandb`;
+pass --no-wandb to turn that off.
 
     modal run modal_app.py --name logstd_lr --mode ablation --seeds 0,1,2
     modal run modal_app.py --name smoke --smoke              # 2 updates per run
@@ -25,12 +27,19 @@ volume = modal.Volume.from_name("sofa-runs", create_if_missing=True)
 image = (
     modal.Image.debian_slim(python_version="3.11")
     .pip_install("torch==2.5.1", index_url="https://download.pytorch.org/whl/cpu")
-    .pip_install("numpy==2.4.6", "gymnasium==1.3.0", "shapely==2.1.2")
+    .pip_install("numpy==2.4.6", "gymnasium==1.3.0", "shapely==2.1.2", "wandb==0.31.0")
     .add_local_python_source("sofa_env", "sofa_rl", "train", "sweep")
 )
 
 
-@app.function(image=image, volumes={RUNS: volume}, cpu=1.0, memory=1024, timeout=3 * 60 * 60)
+@app.function(
+    image=image,
+    volumes={RUNS: volume},
+    secrets=[modal.Secret.from_name("wandb")],
+    cpu=1.0,
+    memory=1024,
+    timeout=3 * 60 * 60,
+)
 def train_remote(cfg_dict: Dict[str, Any]) -> str:
     import sweep
     import train
@@ -63,11 +72,13 @@ def finish(name: str, sweep_meta: Dict[str, Any]) -> None:
 
 
 @app.local_entrypoint()
-def main(name: str, mode: str = "ablation", seeds: str = "0,1,2", smoke: bool = False):
+def main(name: str, mode: str = "ablation", seeds: str = "0,1,2", smoke: bool = False, wandb: bool = True):
     import sweep
 
-    if smoke:
-        sweep.BASE = replace(sweep.BASE, total_steps=2 * sweep.BASE.ppo.steps_per_batch)
+    sweep.BASE = replace(sweep.BASE, wandb_mode="online" if wandb else "disabled")
+    if smoke:  # 2 updates at the largest batch size in the sweep, so every run gets at least 2
+        largest_batch = max([sweep.BASE.ppo.steps_per_batch, *sweep.AXES.get("ppo.steps_per_batch", [])])
+        sweep.BASE = replace(sweep.BASE, total_steps=2 * largest_batch)
     seed_list = [int(s) for s in seeds.split(",")]
     runs = sweep.build_runs(name, mode, seed_list)
     todo = incomplete.remote([asdict(cfg) for _, cfg in runs])

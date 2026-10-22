@@ -3,7 +3,8 @@ the rotation path.
 
 Writes config.json, metrics.jsonl, last.pt / best.pt (by eval area), and
 paths/update_XXXX.npz (the deterministic rotation path after each update) to
-runs/<run_name>/.
+runs/<run_name>/. With cfg.wandb_mode != "disabled", each metrics row is also
+logged to Weights & Biases (project sofa-rl, grouped by sweep).
 """
 from __future__ import annotations
 
@@ -21,6 +22,7 @@ from sofa_rl.agents.ppo_agent import summarize_episodes
 from sofa_rl.config import TrainConfig
 
 RUNS_DIR = Path("runs")
+WANDB_PROJECT = "sofa-rl"
 
 
 def lr_lambda(schedule: str, n_updates: int):
@@ -106,6 +108,18 @@ def main(cfg: TrainConfig):
         for opt in (actor_optimizer, critic_optimizer)
     ]
 
+    wandb_run = None
+    if cfg.wandb_mode != "disabled":
+        import wandb
+
+        wandb_run = wandb.init(
+            project=WANDB_PROJECT,
+            name=run_name,
+            group=run_name.rpartition("/")[0] or None,
+            config=asdict(cfg),
+            mode=cfg.wandb_mode,
+        )
+
     agent = PPOAgent(
         env=env,
         policy=policy,
@@ -154,6 +168,9 @@ def main(cfg: TrainConfig):
             metrics_file.write(json.dumps(row) + "\n")
             metrics_file.flush()
 
+            if wandb_run is not None:
+                wandb_run.log(row, step=total_steps)
+
             checkpoint_args = (
                 actor, critic, actor_optimizer, critic_optimizer, schedulers,
                 update, total_steps, eval_area, cfg,
@@ -170,6 +187,9 @@ def main(cfg: TrainConfig):
                 f"| kl {row['approx_kl']:.4f} | ev {row['explained_variance']:.2f} "
                 f"| std {row['policy_std']:.3f} | {time.time() - start:.0f}s"
             )
+
+    if wandb_run is not None:
+        wandb_run.finish()
 
 
 if __name__ == "__main__":
