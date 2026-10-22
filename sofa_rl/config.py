@@ -6,7 +6,7 @@ into them. TrainConfig nests all of them and is what gets saved per run.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Dict, Optional
 
 
 @dataclass(frozen=True)
@@ -48,3 +48,14 @@ class TrainConfig:
     total_steps: int = 1_000_000
     seed: int = 0
     run_name: Optional[str] = None
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "TrainConfig":
+        """Inverse of dataclasses.asdict, e.g. for a config.json or a config sent to a remote worker."""
+        return cls(
+            env=EnvConfig(**d["env"]),
+            network=NetworkConfig(**d["network"]),
+            ppo=PPOConfig(**d["ppo"]),
+            optim=OptimConfig(**d["optim"]),
+            **{k: v for k, v in d.items() if k not in ("env", "network", "ppo", "optim")},
+        )
