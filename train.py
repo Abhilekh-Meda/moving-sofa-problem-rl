@@ -1,8 +1,9 @@
 """Train a PPO agent on SofaEnv to maximise the area of the sofa carved out by
 the rotation path.
 
-Writes config.json, metrics.jsonl, and paths/update_XXXX.npz (the deterministic
-rotation path after each update) to runs/<run_name>/.
+Writes config.json, metrics.jsonl, last.pt / best.pt (by eval area), and
+paths/update_XXXX.npz (the deterministic rotation path after each update) to
+runs/<run_name>/.
 """
 from __future__ import annotations
 
@@ -10,6 +11,7 @@ import json
 import time
 from dataclasses import asdict
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
 import torch
@@ -47,6 +49,37 @@ def evaluate(policy: ActorPolicy, env: SofaEnv) -> tuple[np.ndarray, float]:
         corners.append(info["corner"])
         done = terminated or truncated
     return np.array(corners), info["area"]
+
+
+def save_checkpoint(
+    path: Path,
+    actor: GaussianActor,
+    critic: ValueCritic,
+    actor_optimizer: torch.optim.Optimizer,
+    critic_optimizer: torch.optim.Optimizer,
+    schedulers: list,
+    update: int,
+    total_steps: int,
+    eval_area: float,
+    resweep_area: Optional[float],
+    cfg: TrainConfig,
+) -> None:
+    """Everything needed to inspect the policy or resume training after `update`."""
+    torch.save(
+        {
+            "actor": actor.state_dict(),
+            "critic": critic.state_dict(),
+            "actor_optimizer": actor_optimizer.state_dict(),
+            "critic_optimizer": critic_optimizer.state_dict(),
+            "schedulers": [s.state_dict() for s in schedulers],
+            "update": update,
+            "total_steps": total_steps,
+            "eval_area": eval_area,
+            "resweep_area": resweep_area,
+            "config": asdict(cfg),
+        },
+        path,
+    )
 
 
 def main(cfg: TrainConfig):
@@ -87,6 +120,7 @@ def main(cfg: TrainConfig):
     )
 
     total_steps = 0
+    best_eval_area = -np.inf
     start = time.time()
     with open(run_dir / "metrics.jsonl", "w") as metrics_file:
         for update in range(n_updates):
@@ -129,6 +163,15 @@ def main(cfg: TrainConfig):
             }
             metrics_file.write(json.dumps(row) + "\n")
             metrics_file.flush()
+
+            checkpoint_args = (
+                actor, critic, actor_optimizer, critic_optimizer, schedulers,
+                update, total_steps, eval_area, resweep_area, cfg,
+            )
+            save_checkpoint(run_dir / "last.pt", *checkpoint_args)
+            if eval_area > best_eval_area:
+                best_eval_area = eval_area
+                save_checkpoint(run_dir / "best.pt", *checkpoint_args)
 
             print(
                 f"update {update + 1}/{n_updates} | steps {total_steps} "
