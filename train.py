@@ -14,7 +14,7 @@ import numpy as np
 import torch
 
 from sofa_env import SofaEnv
-from sofa_rl import GaussianActor, GaussianActorPolicy, PPOAgent, RolloutBuffer, ValueCritic
+from sofa_rl import ActorPolicy, GaussianActor, GaussianActorPolicy, PPOAgent, RolloutBuffer, ValueCritic
 from sofa_rl.agents.ppo_agent import summarize_episodes
 from sofa_rl.config import TrainConfig
 
@@ -27,6 +27,25 @@ def lr_lambda(schedule: str, n_updates: int):
     if schedule == "constant":
         return lambda step: 1.0
     raise ValueError(f"unknown lr_schedule {schedule!r}")
+
+
+def evaluate(policy: ActorPolicy, env: SofaEnv) -> tuple[np.ndarray, float]:
+    """Run one episode with the policy's mean action.
+
+    Returns (corners, area): the rotation path c_0, ..., c_N of shape (N + 1, 2)
+    and the final sofa area at the env's n_steps.
+    """
+    obs, _ = env.reset()
+    corners = [env.corner.copy()]
+    done = False
+    while not done:
+        obs_tensor = torch.as_tensor(obs, dtype=torch.float32).unsqueeze(0) # (1, obs_dim)
+        with torch.no_grad():
+            action = policy.predict(obs_tensor, deterministic=True).squeeze(0).cpu().numpy() # (action_dim,)
+        obs, _, terminated, truncated, info = env.step(action)
+        corners.append(info["corner"])
+        done = terminated or truncated
+    return np.array(corners), info["area"]
 
 
 def main(cfg: TrainConfig):
