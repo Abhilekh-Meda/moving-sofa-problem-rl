@@ -40,18 +40,11 @@ class OptimConfig:
 
 
 @dataclass(frozen=True)
-class EvalConfig:
-    resweep_every: int = 10  # updates between re-sweeps; the last update is always re-swept
-    resweep_factor: int = 5  # re-sweep at n_steps * resweep_factor
-
-
-@dataclass(frozen=True)
 class TrainConfig:
     env: EnvConfig = field(default_factory=EnvConfig)
     network: NetworkConfig = field(default_factory=NetworkConfig)
     ppo: PPOConfig = field(default_factory=PPOConfig)
     optim: OptimConfig = field(default_factory=OptimConfig)
-    eval: EvalConfig = field(default_factory=EvalConfig)
     total_steps: int = 1_000_000
     seed: int = 0
     run_name: Optional[str] = None

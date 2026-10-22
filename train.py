@@ -11,12 +11,11 @@ import json
 import time
 from dataclasses import asdict
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 import torch
 
-from sofa_env import SofaEnv, resweep
+from sofa_env import SofaEnv
 from sofa_rl import ActorPolicy, GaussianActor, GaussianActorPolicy, PPOAgent, RolloutBuffer, ValueCritic
 from sofa_rl.agents.ppo_agent import summarize_episodes
 from sofa_rl.config import TrainConfig
@@ -61,7 +60,6 @@ def save_checkpoint(
     update: int,
     total_steps: int,
     eval_area: float,
-    resweep_area: Optional[float],
     cfg: TrainConfig,
 ) -> None:
     """Everything needed to inspect the policy or resume training after `update`."""
@@ -75,7 +73,6 @@ def save_checkpoint(
             "update": update,
             "total_steps": total_steps,
             "eval_area": eval_area,
-            "resweep_area": resweep_area,
             "config": asdict(cfg),
         },
         path,
@@ -132,18 +129,12 @@ def main(cfg: TrainConfig):
                 scheduler.step()
 
             corners, eval_area = evaluate(policy, eval_env)
-            resweep_area = None
-            if (update + 1) % cfg.eval.resweep_every == 0 or update == n_updates - 1:
-                resweep_area = resweep(
-                    corners, cfg.eval.resweep_factor, max_corner_speed=cfg.env.max_corner_speed
-                ).area
 
-            # saved for (sofa_env.replay) without the network: for plots, animation, re-sweeps
+            # saved for (sofa_env.replay) without the network: for plots and animation
             np.savez(
                 paths_dir / f"update_{update:04d}.npz",
                 corners=corners,
                 area=eval_area,
-                resweep_area=np.nan if resweep_area is None else resweep_area,
                 polygon=np.array(eval_env.shape.exterior.coords, dtype=np.float64).reshape(-1, 2),
                 n_steps=cfg.env.n_steps,
                 update=update,
@@ -157,7 +148,6 @@ def main(cfg: TrainConfig):
                 "actor_lr": actor_lr,
                 "max_final_area": max(e["final_area"] for e in episodes),
                 "eval_area": eval_area,
-                "resweep_area": resweep_area,
                 **episode_stats,
                 **update_stats,
             }
@@ -166,7 +156,7 @@ def main(cfg: TrainConfig):
 
             checkpoint_args = (
                 actor, critic, actor_optimizer, critic_optimizer, schedulers,
-                update, total_steps, eval_area, resweep_area, cfg,
+                update, total_steps, eval_area, cfg,
             )
             save_checkpoint(run_dir / "last.pt", *checkpoint_args)
             if eval_area > best_eval_area:
@@ -176,9 +166,8 @@ def main(cfg: TrainConfig):
             print(
                 f"update {update + 1}/{n_updates} | steps {total_steps} "
                 f"| area mean {row['mean_final_area']:.4f} max {row['max_final_area']:.4f} "
-                f"eval {eval_area:.4f}"
-                + (f" resweep {resweep_area:.4f} " if resweep_area is not None else " ")
-                + f"| kl {row['approx_kl']:.4f} | ev {row['explained_variance']:.2f} "
+                f"eval {eval_area:.4f} "
+                f"| kl {row['approx_kl']:.4f} | ev {row['explained_variance']:.2f} "
                 f"| std {row['policy_std']:.3f} | {time.time() - start:.0f}s"
             )
 
