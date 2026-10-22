@@ -1,7 +1,8 @@
 """Train a PPO agent on SofaEnv to maximise the area of the sofa carved out by
 the rotation path.
 
-Writes config.json and metrics.jsonl to runs/<run_name>/.
+Writes config.json, metrics.jsonl, and paths/update_XXXX.npz (the deterministic
+rotation path after each update) to runs/<run_name>/.
 """
 from __future__ import annotations
 
@@ -13,7 +14,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from sofa_env import SofaEnv
+from sofa_env import SofaEnv, resweep
 from sofa_rl import ActorPolicy, GaussianActor, GaussianActorPolicy, PPOAgent, RolloutBuffer, ValueCritic
 from sofa_rl.agents.ppo_agent import summarize_episodes
 from sofa_rl.config import TrainConfig
@@ -53,11 +54,13 @@ def main(cfg: TrainConfig):
     np.random.seed(cfg.seed)
     run_name = cfg.run_name or f"n{cfg.env.n_steps}_seed{cfg.seed}"
     run_dir = RUNS_DIR / run_name
-    run_dir.mkdir(parents=True, exist_ok=True)
+    paths_dir = run_dir / "paths"
+    paths_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "config.json").write_text(json.dumps(asdict(cfg), indent=2))
 
     env = SofaEnv(**asdict(cfg.env))
     env.reset(seed=cfg.seed)
+    eval_env = SofaEnv(**asdict(cfg.env))
     obs_dim = env.observation_space.shape[0]
     action_dim = env.action_space.shape[0]
 
@@ -94,6 +97,24 @@ def main(cfg: TrainConfig):
             for scheduler in schedulers:
                 scheduler.step()
 
+            corners, eval_area = evaluate(policy, eval_env)
+            resweep_area = None
+            if (update + 1) % cfg.eval.resweep_every == 0 or update == n_updates - 1:
+                resweep_area = resweep(
+                    corners, cfg.eval.resweep_factor, max_corner_speed=cfg.env.max_corner_speed
+                ).area
+
+            # saved for (sofa_env.replay) without the network: for plots, animation, re-sweeps
+            np.savez(
+                paths_dir / f"update_{update:04d}.npz",
+                corners=corners,
+                area=eval_area,
+                resweep_area=np.nan if resweep_area is None else resweep_area,
+                polygon=np.array(eval_env.shape.exterior.coords, dtype=np.float64).reshape(-1, 2),
+                n_steps=cfg.env.n_steps,
+                update=update,
+            )
+
             episode_stats = summarize_episodes(episodes)
             total_steps += episode_stats["num_steps"]
             row = {
@@ -101,6 +122,8 @@ def main(cfg: TrainConfig):
                 "total_steps": total_steps,
                 "actor_lr": actor_lr,
                 "max_final_area": max(e["final_area"] for e in episodes),
+                "eval_area": eval_area,
+                "resweep_area": resweep_area,
                 **episode_stats,
                 **update_stats,
             }
@@ -110,7 +133,9 @@ def main(cfg: TrainConfig):
             print(
                 f"update {update + 1}/{n_updates} | steps {total_steps} "
                 f"| area mean {row['mean_final_area']:.4f} max {row['max_final_area']:.4f} "
-                f"| kl {row['approx_kl']:.4f} | ev {row['explained_variance']:.2f} "
+                f"eval {eval_area:.4f}"
+                + (f" resweep {resweep_area:.4f} " if resweep_area is not None else " ")
+                + f"| kl {row['approx_kl']:.4f} | ev {row['explained_variance']:.2f} "
                 f"| std {row['policy_std']:.3f} | {time.time() - start:.0f}s"
             )
 
