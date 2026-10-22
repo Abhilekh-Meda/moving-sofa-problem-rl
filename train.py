@@ -1,7 +1,7 @@
 """Train a PPO agent on SofaEnv to maximise the area of the sofa carved out by
 the rotation path.
 
-Writes config.json and metrics.jsonl to runs/<RUN_NAME>/.
+Writes config.json and metrics.jsonl to runs/<run_name>/.
 """
 from __future__ import annotations
 
@@ -16,48 +16,41 @@ import torch
 from sofa_env import SofaEnv
 from sofa_rl import GaussianActor, GaussianActorPolicy, PPOAgent, RolloutBuffer, ValueCritic
 from sofa_rl.agents.ppo_agent import summarize_episodes
-from sofa_rl.config import PPOConfig
+from sofa_rl.config import TrainConfig
 
-# env
-N_STEPS = 200
-MAX_CORNER_SPEED = 2.0
-
-# optimisation
-ACTOR_LR = 3e-4
-CRITIC_LR = 1e-3
-STEPS_PER_BATCH = 4096
-TOTAL_STEPS = 1_000_000
-PPO_CONFIG = PPOConfig()
-
-# run
-SEED = 0
-RUN_NAME = f"n{N_STEPS}_seed{SEED}"
-RUN_DIR = Path("runs") / RUN_NAME
+RUNS_DIR = Path("runs")
 
 
-def linear_decay(n_updates: int):
-    return lambda step: 1.0 - step / n_updates
+def lr_lambda(schedule: str, n_updates: int):
+    if schedule == "linear":
+        return lambda step: 1.0 - step / n_updates
+    if schedule == "constant":
+        return lambda step: 1.0
+    raise ValueError(f"unknown lr_schedule {schedule!r}")
 
 
-def main():
-    torch.manual_seed(SEED)
-    np.random.seed(SEED)
-    RUN_DIR.mkdir(parents=True, exist_ok=True)
+def main(cfg: TrainConfig):
+    torch.manual_seed(cfg.seed)
+    np.random.seed(cfg.seed)
+    run_name = cfg.run_name or f"n{cfg.env.n_steps}_seed{cfg.seed}"
+    run_dir = RUNS_DIR / run_name
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "config.json").write_text(json.dumps(asdict(cfg), indent=2))
 
-    env = SofaEnv(n_steps=N_STEPS, max_corner_speed=MAX_CORNER_SPEED)
-    env.reset(seed=SEED)
+    env = SofaEnv(**asdict(cfg.env))
+    env.reset(seed=cfg.seed)
     obs_dim = env.observation_space.shape[0]
     action_dim = env.action_space.shape[0]
 
-    actor = GaussianActor(obs_dim, action_dim) # network
+    actor = GaussianActor(obs_dim, action_dim, **asdict(cfg.network)) # network
     policy = GaussianActorPolicy(actor) # policy
-    critic = ValueCritic(obs_dim)
-    actor_optimizer = torch.optim.Adam(actor.parameters(), lr=ACTOR_LR)
-    critic_optimizer = torch.optim.Adam(critic.parameters(), lr=CRITIC_LR)
+    critic = ValueCritic(obs_dim, hidden_dim=cfg.network.hidden_dim)
+    actor_optimizer = torch.optim.Adam(actor.parameters(), lr=cfg.optim.actor_lr)
+    critic_optimizer = torch.optim.Adam(critic.parameters(), lr=cfg.optim.critic_lr)
 
-    n_updates = TOTAL_STEPS // STEPS_PER_BATCH
+    n_updates = cfg.total_steps // cfg.ppo.steps_per_batch
     schedulers = [
-        torch.optim.lr_scheduler.LambdaLR(opt, linear_decay(n_updates))
+        torch.optim.lr_scheduler.LambdaLR(opt, lr_lambda(cfg.optim.lr_schedule, n_updates))
         for opt in (actor_optimizer, critic_optimizer)
     ]
 
@@ -68,30 +61,17 @@ def main():
         buffer=RolloutBuffer(),
         actor_optimizer=actor_optimizer,
         critic_optimizer=critic_optimizer,
-        steps_per_batch=STEPS_PER_BATCH,
-        config=PPO_CONFIG,
+        config=cfg.ppo,
     )
-
-    config = {
-        "n_steps": N_STEPS,
-        "max_corner_speed": MAX_CORNER_SPEED,
-        "actor_lr": ACTOR_LR,
-        "critic_lr": CRITIC_LR,
-        "steps_per_batch": STEPS_PER_BATCH,
-        "total_steps": TOTAL_STEPS,
-        "seed": SEED,
-        "ppo": asdict(PPO_CONFIG),
-    }
-    (RUN_DIR / "config.json").write_text(json.dumps(config, indent=2))
 
     total_steps = 0
     start = time.time()
-    with open(RUN_DIR / "metrics.jsonl", "w") as metrics_file:
+    with open(run_dir / "metrics.jsonl", "w") as metrics_file:
         for update in range(n_updates):
             episodes = agent.collect_rollout()
             update_stats = agent.update()
             actor_lr = actor_optimizer.param_groups[0]["lr"]
-            
+
             for scheduler in schedulers:
                 scheduler.step()
 
@@ -117,4 +97,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    main(TrainConfig())

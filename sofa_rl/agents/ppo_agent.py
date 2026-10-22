@@ -23,7 +23,6 @@ class PPOAgent:
         buffer: RolloutBuffer,
         actor_optimizer: torch.optim.Optimizer,
         critic_optimizer: torch.optim.Optimizer,
-        steps_per_batch: int,
         config: PPOConfig
     ):
         self.env = env
@@ -32,7 +31,6 @@ class PPOAgent:
         self.buffer = buffer
         self.actor_optimizer = actor_optimizer
         self.critic_optimizer = critic_optimizer
-        self.steps_per_batch = steps_per_batch
         self.cfg = config
 
     def _rollout_episode(self) -> Dict[str, float]:
@@ -72,7 +70,7 @@ class PPOAgent:
 
     def collect_rollout(self) -> List[Dict[str, float]]:
         """Call rollout_episode repeatedly (each starting from a fresh
-        self.env.reset()) until self.buffer has at least self.steps_per_batch
+        self.env.reset()) until self.buffer has at least self.cfg.steps_per_batch
         steps. No episode is cut off mid-way: the last rollout_episode()
         call is always allowed to finish, even if it pushes the buffer past
         steps_per_batch.
@@ -80,7 +78,7 @@ class PPOAgent:
         self.buffer.reset()
         episodes = []
 
-        while not len(self.buffer) >= self.steps_per_batch:
+        while not len(self.buffer) >= self.cfg.steps_per_batch:
             episodes.append(self._rollout_episode())
         
         return episodes

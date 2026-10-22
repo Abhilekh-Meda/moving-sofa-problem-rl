@@ -8,7 +8,7 @@ from torch.distributions import Normal
 
 
 class GaussianActor(nn.Module):
-    def __init__(self, obs_dim: int, action_dim: int, hidden_dim: int=64):
+    def __init__(self, obs_dim: int, action_dim: int, hidden_dim: int=64, log_std_init: float=-3.0):
         super().__init__()
         self.obs_dim = obs_dim
         self.action_dim = action_dim
@@ -19,7 +19,7 @@ class GaussianActor(nn.Module):
             nn.Linear(hidden_dim, action_dim)
         )
 
-        self.log_std = nn.Parameter(torch.ones(action_dim) * -3.0)
+        self.log_std = nn.Parameter(torch.ones(action_dim) * log_std_init)
 
     def forward(self, obs: torch.Tensor) -> torch.Tensor:
         mu = self.net(obs) # (B, A)
