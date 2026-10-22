@@ -48,7 +48,6 @@ class TrainConfig:
     total_steps: int = 1_000_000
     seed: int = 0
     run_name: Optional[str] = None
-    wandb_mode: str = "disabled"  # "online", "offline", or "disabled" (W&B logging off)
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "TrainConfig":

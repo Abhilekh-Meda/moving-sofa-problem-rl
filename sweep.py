@@ -254,7 +254,7 @@ def _run_result(run_dir: Path) -> Dict[str, Any]:
 
     overrides = {
         k: v for k, v in _flatten(cfg).items()
-        if k not in ("seed", "run_name", "wandb_mode") and _has_field(BASE, k) and v != lookup(BASE, k)
+        if k not in ("seed", "run_name") and _has_field(BASE, k) and v != lookup(BASE, k)
     }
     return {
         "overrides": overrides,
