@@ -49,30 +49,41 @@ from sofa_rl.config import NetworkConfig, TrainConfig
 
 BASE = replace(TrainConfig(), network=NetworkConfig(log_std_init=-0.5))
 
-# full factorial: 4 * 3 * 3 * 2 = 72 settings
+# training budget as a multiple of BASE.total_steps (so modal_app.py --smoke, which
+# shortens BASE, also shortens every budget)
+BUDGET = "budget"
+
+# full factorial: 4 * 4 * 4 * 2 * 2 = 256 settings
 GRID_AXES: Dict[str, List[Any]] = {
     # exploration: -0.5 was best of {-3, -2, -1, -0.5}; 0 and 0.5 test whether more helps
     "network.log_std_init": [-1.0, -0.5, 0.0, 0.5],
-    # 1e-3 collapsed at log_std -3; untested at high noise
-    "optim.actor_lr": [1e-4, 3e-4, 1e-3],
+    # 1e-3 collapsed at log_std -3; untested at high noise, as is 3e-3
+    "optim.actor_lr": [1e-4, 3e-4, 1e-3, 3e-3],
     # horizon: path-level noise scales like sigma / sqrt(N), so N and log_std interact;
     # larger N also measures the area more accurately
-    "env.n_steps": [100, 200, 400],
+    "env.n_steps": [100, 200, 400, 800],
+    # constant keeps the step size high throughout; linear decays it to 0 by the end of the budget
     "optim.lr_schedule": ["linear", "constant"],
+    # the area was still rising after 2M steps when continued from a 1M run
+    BUDGET: [1, 3],
 }
 
-# one at a time around BASE: 9 axes, 21 non-base values
+# one at a time around BASE: 10 axes, 28 non-base values
 ABLATION_AXES: Dict[str, List[Any]] = {
-    "ppo.lam": [0.9, 0.95, 0.99, 1.0],
-    "ppo.clip_eps": [0.1, 0.2, 0.3],
-    "ppo.epochs": [5, 10, 20],
-    "ppo.minibatch_size": [64, 256, 1024],
-    "ppo.entropy_coef": [0.0, 1e-3, 1e-2],
-    "ppo.steps_per_batch": [2048, 4096, 8192],
-    "optim.critic_lr": [3e-4, 1e-3, 3e-3],
-    "network.hidden_dim": [32, 64, 128],
+    "ppo.lam": [0.8, 0.9, 0.95, 0.99, 1.0],
+    "ppo.clip_eps": [0.05, 0.1, 0.2, 0.3],
+    "ppo.epochs": [3, 5, 10, 20],
+    # 4096 is one minibatch per epoch (full batch)
+    "ppo.minibatch_size": [64, 256, 1024, 4096],
+    # counteracts the shrinking std that limited the log_std -3 runs
+    "ppo.entropy_coef": [0.0, 1e-3, 3e-3, 1e-2],
+    # more episodes per batch: lower-variance advantages, fewer updates
+    "ppo.steps_per_batch": [2048, 4096, 8192, 16384],
+    "optim.critic_lr": [3e-4, 1e-3, 3e-3, 1e-2],
+    "network.hidden_dim": [32, 64, 128, 256],
     # Gerver's corner moves at up to 1.42 per radian, so 1.5 is the tightest bound that contains it
     "env.max_corner_speed": [1.5, 2.0, 3.0],
+    BUDGET: [1, 3],
 }
 
 # every axis with its values; modal_app.py records this in sweep.json
@@ -99,6 +110,20 @@ def lookup(cfg: Any, key: str) -> Any:
     return cfg
 
 
+def _base_value(key: str) -> Any:
+    return 1 if key == BUDGET else lookup(BASE, key)
+
+
+def apply_overrides(overrides: Dict[str, Any]) -> TrainConfig:
+    cfg = BASE
+    for key, value in overrides.items():
+        if key == BUDGET:
+            cfg = replace(cfg, total_steps=BASE.total_steps * value)
+        else:
+            cfg = override(cfg, key, value)
+    return cfg
+
+
 def _has_field(cfg: Any, key: str) -> bool:
     for part in key.split("."):
         if not hasattr(cfg, part):
@@ -118,7 +143,7 @@ def setting_name(overrides: Dict[str, Any]) -> str:
 
 
 def _non_base(overrides: Dict[str, Any]) -> Dict[str, Any]:
-    return {k: v for k, v in overrides.items() if v != lookup(BASE, k)}
+    return {k: v for k, v in overrides.items() if v != _base_value(k)}
 
 
 def grid_settings() -> List[Dict[str, Any]]:
@@ -129,7 +154,7 @@ def grid_settings() -> List[Dict[str, Any]]:
 def ablation_settings() -> List[Dict[str, Any]]:
     out = [{}]
     for key, values in ABLATION_AXES.items():
-        out += [{key: v} for v in values if v != lookup(BASE, key)]
+        out += [{key: v} for v in values if v != _base_value(key)]
     return out
 
 
@@ -159,9 +184,7 @@ def settings(mode: str) -> List[Dict[str, Any]]:
 def build_runs(sweep: str, mode: str, seeds: List[int]) -> List[Tuple[str, TrainConfig]]:
     runs = []
     for overrides in settings(mode):
-        cfg = BASE
-        for key, value in overrides.items():
-            cfg = override(cfg, key, value)
+        cfg = apply_overrides(overrides)
         name = setting_name(overrides)
         for seed in seeds:
             runs.append((name, replace(cfg, seed=seed, run_name=f"{sweep}/{name}_seed{seed}")))
@@ -231,7 +254,7 @@ def _run_result(run_dir: Path) -> Dict[str, Any]:
 
     overrides = {
         k: v for k, v in _flatten(cfg).items()
-        if k not in ("seed", "run_name") and _has_field(BASE, k) and v != lookup(BASE, k)
+        if k not in ("seed", "run_name", "wandb_mode") and _has_field(BASE, k) and v != lookup(BASE, k)
     }
     return {
         "overrides": overrides,
