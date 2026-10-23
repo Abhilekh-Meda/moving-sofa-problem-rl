@@ -4,12 +4,18 @@ the rotation path.
 Writes config.json, metrics.jsonl, last.pt / best.pt (by certified area), and
 paths/update_XXXX.npz (the deterministic rotation path after each update) to
 runs/<run_name>/.
+
+    python train.py                  # stage 1, BASE_CONFIG -> runs/base/
+    python train.py --run-name base2 # same settings, another folder
+
+Stage 2 (fine-tuning this policy on the certified-area reward) is finetune.py.
 """
 from __future__ import annotations
 
+import argparse
 import json
 import time
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import numpy as np
@@ -18,9 +24,21 @@ import torch
 from sofa_env import SofaEnv, replay
 from sofa_rl import ActorPolicy, GaussianActor, GaussianActorPolicy, PPOAgent, RolloutBuffer, ValueCritic
 from sofa_rl.agents.ppo_agent import summarize_episodes
-from sofa_rl.config import TrainConfig
+from sofa_rl.config import EnvConfig, NetworkConfig, OptimConfig, PPOConfig, TrainConfig
 
 RUNS_DIR = Path("runs")
+
+# stage 1: the settings of the base policy that the final model was fine-tuned from
+BASE_CONFIG = TrainConfig(
+    env=EnvConfig(n_steps=200, max_corner_speed=2.0),
+    network=NetworkConfig(hidden_dim=64, log_std_init=-0.5),
+    ppo=PPOConfig(gamma=1.0, lam=0.95, clip_eps=0.2, epochs=10, minibatch_size=64,
+                  entropy_coef=1e-3, steps_per_batch=4096),
+    optim=OptimConfig(actor_lr=3e-4, critic_lr=1e-3, lr_schedule="linear"),
+    total_steps=1_000_000,
+    seed=1,
+    run_name="base",
+)
 # half-plane directions for the certified area logged every update
 CERT_DIRS = 5
 
@@ -208,5 +226,16 @@ def main(cfg: TrainConfig):
             )
 
 
+def run_new(cfg: TrainConfig) -> None:
+    """main(cfg), refusing to overwrite an existing run folder."""
+    run_dir = RUNS_DIR / cfg.run_name
+    if (run_dir / "metrics.jsonl").exists():
+        raise SystemExit(f"{run_dir} already holds a run; pass a different --run-name")
+    main(cfg)
+
+
 if __name__ == "__main__":
-    main(TrainConfig())
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--run-name", default=BASE_CONFIG.run_name, help="output folder under runs/")
+    args = parser.parse_args()
+    run_new(replace(BASE_CONFIG, run_name=args.run_name))
