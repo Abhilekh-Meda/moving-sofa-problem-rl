@@ -23,7 +23,6 @@ class PPOAgent:
         buffer: RolloutBuffer,
         actor_optimizer: torch.optim.Optimizer,
         critic_optimizer: torch.optim.Optimizer,
-        steps_per_batch: int,
         config: PPOConfig
     ):
         self.env = env
@@ -32,7 +31,6 @@ class PPOAgent:
         self.buffer = buffer
         self.actor_optimizer = actor_optimizer
         self.critic_optimizer = critic_optimizer
-        self.steps_per_batch = steps_per_batch
         self.cfg = config
 
     def _rollout_episode(self) -> Dict[str, float]:
@@ -42,7 +40,7 @@ class PPOAgent:
         Starts with self.env.reset(). For each step: self.policy.act(obs)
         for (action, log_prob), self.critic(obs) for value, step self.env,
         self.buffer.add(...). Runs until the episode terminates or truncates.
-        Returns episode stats: {"return", "length", "success", "final_geo_dist"}.
+        Returns episode stats: {"return", "length", "final_area"}.
         """
         obs, _ = self.env.reset()
         done = False
@@ -67,13 +65,12 @@ class PPOAgent:
         return {
             "return": episode_return,
             "length": steps,
-            "success": float(info["success"]),
-            "final_geo_dist": float(info["geodesic_dist"]),
+            "final_area": float(info["area"]),
         }
 
     def collect_rollout(self) -> List[Dict[str, float]]:
         """Call rollout_episode repeatedly (each starting from a fresh
-        self.env.reset()) until self.buffer has at least self.steps_per_batch
+        self.env.reset()) until self.buffer has at least self.cfg.steps_per_batch
         steps. No episode is cut off mid-way: the last rollout_episode()
         call is always allowed to finish, even if it pushes the buffer past
         steps_per_batch.
@@ -81,7 +78,7 @@ class PPOAgent:
         self.buffer.reset()
         episodes = []
 
-        while not len(self.buffer) >= self.steps_per_batch:
+        while not len(self.buffer) >= self.cfg.steps_per_batch:
             episodes.append(self._rollout_episode())
         
         return episodes
@@ -103,7 +100,7 @@ class PPOAgent:
         log_probs_t = torch.stack(log_probs) # (B,)
         dones_t = torch.logical_or(torch.tensor(terminateds), torch.tensor(truncateds)).float()
 
-        advantages, normalized_advantages, returns = compute_gae(rewards_t, values_t, dones_t) # all are (B,)
+        advantages, normalized_advantages, returns = compute_gae(rewards_t, values_t, dones_t, gamma=self.cfg.gamma, lam=self.cfg.lam) # all are (B,)
 
         explained_variance = 1.0 - (returns - values_t).var() / (returns.var() + 1e-8)
         stats = {"policy_loss": [], "value_loss": [], "entropy": [], "approx_kl": [], "clip_fraction": []}
@@ -161,7 +158,6 @@ def summarize_episodes(episodes: List[Dict[str, float]]) -> Dict[str, float]:
     """Average per-episode stats from collect_rollout() into one dict."""
     n = len(episodes)
     summary = {f"mean_{k}": sum(e[k] for e in episodes) / n for k in episodes[0]}
-    summary["success_rate"] = summary.pop("mean_success")
     summary["num_episodes"] = n
     summary["num_steps"] = sum(e["length"] for e in episodes)
     return summary

@@ -16,3 +16,6 @@ env/
 # Editors
 .vscode/
 .idea/
+
+# Training runs
+runs/

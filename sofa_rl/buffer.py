@@ -1,9 +1,8 @@
 """Rollout storage for on-policy algorithms (PPO).
 
 Pure storage: appends to plain lists as steps come in, sized dynamically
-(no buffer_size known upfront -- collection runs to complete episodes, see
-PPOAgent.collect_rollout). No sampling, advantage/return computation, or
-minibatch logic
+(no buffer_size known upfront -- collection runs to complete episodes).
+No sampling, advantage/return computation, or minibatch logic
 """
 from __future__ import annotations
 
