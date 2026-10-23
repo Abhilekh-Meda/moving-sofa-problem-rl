@@ -22,6 +22,7 @@ from gymnasium import spaces
 from shapely import affinity
 from shapely.geometry import Polygon, box
 
+from .certified import certified_cut
 from .corridor import build_l_corridor
 
 
@@ -34,6 +35,9 @@ class SofaEnv(gym.Env):
         max_corner_speed: float = 2.0,
         block_length: float = 5.0,
         arm_length: float = 10.0,
+        substeps: int = 1,
+        reward_area: str = "sampled",
+        cert_dirs: int = 5,
     ):
         """
         n_steps: number of rotation steps N; theta advances by (pi/2) / N per step.
@@ -42,6 +46,16 @@ class SofaEnv(gym.Env):
         block_length: the starting block is x in [-block_length, 1], y in [0, 1].
         arm_length: length of each hallway arm, a finite stand-in for infinite
             arms; must exceed the shape's reach from the corner.
+        substeps: cuts per step. Each action moves the corner in a straight line
+            while theta advances, and the hallway cuts the shape at `substeps`
+            evenly spaced points of that motion, so the area (and reward) is
+            measured at N * substeps angles while the agent still makes N decisions.
+        reward_area: "sampled" cuts with the hallway at the sampled positions only, which
+            overestimates the true area of the continuous motion; "certified" keeps only
+            points proven to stay in the hallway for the whole motion (see certified.py),
+            a lower bound on it. The reward and info["area"] use this area; with
+            "certified", info["sampled_area"] also reports the sampled one.
+        cert_dirs: half-plane directions for the certified inner-corner cut.
         """
         super().__init__()
         self.n_steps = n_steps
@@ -49,6 +63,11 @@ class SofaEnv(gym.Env):
         self.max_step = max_corner_speed * self.dtheta # where dtheta is just dt (time step)
         self.block_length = block_length
         self.arm_length = arm_length
+        self.substeps = substeps
+        if reward_area not in ("sampled", "certified"):
+            raise ValueError(f"reward_area must be 'sampled' or 'certified', got {reward_area!r}")
+        self.reward_area = reward_area
+        self.cert_dirs = cert_dirs
 
         self.corridor = build_l_corridor(width=1.0, arm_length=arm_length)
 
@@ -103,28 +122,54 @@ class SofaEnv(gym.Env):
         # slide-in: whatever survives the horizontal arm lies in the strip 0 <= y <= 1;
         # the cut by the hallway at theta = 0 caps it at x = 1; the far end is arbitrary
         self.shape = box(-self.block_length, 0.0, 1.0, 1.0) # starting shape
+        self.sampled_shape = self.shape
         self.area = self.shape.area
         self.initial_area = self.area
         return self._get_obs(), {}
 
     def step(self, action):
         action = np.clip(np.asarray(action, dtype=np.float64), -1.0, 1.0)
+        start_corner, start_theta = self.corner, self.theta
         self.corner = self.corner + action * self.max_step # translation
         self.k += 1
         self.theta = self.k * self.dtheta # rotation
 
-        shape = self.shape.intersection(self._moving_hallway(self.theta, self.corner))
-        if self.k == self.n_steps:
-            shape = shape.intersection(self._exit_strip(self.corner))
-        self.shape = self._largest_piece(shape)
+        poses = [
+            (start_theta + (j / self.substeps) * (self.theta - start_theta),
+             start_corner + (j / self.substeps) * (self.corner - start_corner))
+            for j in range(self.substeps + 1)
+        ]
+        # intersect the step's hallway positions with each other first (small polygons),
+        # then cut the shape once
+        hallway = self._moving_hallway(*poses[-1])
+        for theta, corner in poses[1:-1]:
+            hallway = hallway.intersection(self._moving_hallway(theta, corner))
+        last = self.k == self.n_steps
+
+        sampled = self.sampled_shape.intersection(hallway)
+        if last:
+            sampled = sampled.intersection(self._exit_strip(self.corner))
+        self.sampled_shape = self._largest_piece(sampled)
+
+        if self.reward_area == "sampled":
+            self.shape = self.sampled_shape
+        else:
+            shape = self.shape
+            for (theta0, c0), (theta1, c1) in zip(poses[:-1], poses[1:]):
+                shape = self._largest_piece(certified_cut(shape, theta0, c0, theta1, c1, self.cert_dirs))
+            if last:
+                shape = shape.intersection(self._exit_strip(self.corner))
+            self.shape = self._largest_piece(shape)
 
         new_area = self.shape.area
         reward = (new_area - self.area) / self.initial_area
         self.area = new_area
 
-        terminated = self.k == self.n_steps or self.area == 0.0
+        terminated = last or self.area == 0.0
         truncated = False
         info = {"area": self.area, "theta": self.theta, "corner": self.corner.copy()}
+        if self.reward_area == "certified":
+            info["sampled_area"] = self.sampled_shape.area
         return self._get_obs(), reward, terminated, truncated, info
 
 

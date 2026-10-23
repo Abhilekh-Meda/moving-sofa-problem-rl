@@ -13,6 +13,9 @@ from typing import Any, Dict, Optional
 class EnvConfig:
     n_steps: int = 200
     max_corner_speed: float = 2.0
+    substeps: int = 1  # hallway cuts per decision step
+    reward_area: str = "sampled"  # "sampled" or "certified" (lower bound for the continuous motion)
+    cert_dirs: int = 5
 
 
 @dataclass(frozen=True)
