@@ -51,6 +51,11 @@ class TrainConfig:
     total_steps: int = 1_000_000
     seed: int = 0
     run_name: Optional[str] = None
+    # warm start: a checkpoint path (relative to train.RUNS_DIR, or absolute) whose
+    # actor and critic weights initialise this run; optimisers start fresh
+    init_checkpoint: Optional[str] = None
+    # with a warm start, keep the checkpoint's learned log_std, or reset it to network.log_std_init
+    init_keep_log_std: bool = True
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "TrainConfig":

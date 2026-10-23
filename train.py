@@ -1,7 +1,7 @@
 """Train a PPO agent on SofaEnv to maximise the area of the sofa carved out by
 the rotation path.
 
-Writes config.json, metrics.jsonl, last.pt / best.pt (by eval area), and
+Writes config.json, metrics.jsonl, last.pt / best.pt (by certified area), and
 paths/update_XXXX.npz (the deterministic rotation path after each update) to
 runs/<run_name>/.
 """
@@ -15,12 +15,14 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from sofa_env import SofaEnv
+from sofa_env import SofaEnv, replay
 from sofa_rl import ActorPolicy, GaussianActor, GaussianActorPolicy, PPOAgent, RolloutBuffer, ValueCritic
 from sofa_rl.agents.ppo_agent import summarize_episodes
 from sofa_rl.config import TrainConfig
 
 RUNS_DIR = Path("runs")
+# half-plane directions for the certified area logged every update
+CERT_DIRS = 5
 
 
 def lr_lambda(schedule: str, n_updates: int):
@@ -29,6 +31,28 @@ def lr_lambda(schedule: str, n_updates: int):
     if schedule == "constant":
         return lambda step: 1.0
     raise ValueError(f"unknown lr_schedule {schedule!r}")
+
+
+def certified_area(corners: np.ndarray, cfg: TrainConfig) -> float:
+    """Lower bound on the true area of the continuous motion through `corners`
+    (straight-line corner motion between decisions; see sofa_env/certified.py).
+
+    The area at training N overstates the true area by about 1.2 / N, more than the
+    differences between good runs, so runs are ranked and checkpointed by this instead.
+    """
+    return replay(
+        corners, max_corner_speed=cfg.env.max_corner_speed, reward_area="certified", cert_dirs=CERT_DIRS
+    ).area
+
+
+def path_certified_area(corners: np.ndarray, env_area: float, cfg: TrainConfig) -> float:
+    """Certified area of an evaluated path. With reward_area="certified" the env's own area
+    is already a valid lower bound (tighter with substeps or more directions), so use it."""
+    if len(corners) < cfg.env.n_steps + 1:  # the sofa reached area 0 and the episode ended early
+        return 0.0
+    if cfg.env.reward_area == "certified":
+        return env_area
+    return certified_area(corners, cfg)
 
 
 def evaluate(policy: ActorPolicy, env: SofaEnv) -> tuple[np.ndarray, float]:
@@ -60,6 +84,7 @@ def save_checkpoint(
     update: int,
     total_steps: int,
     eval_area: float,
+    cert_area: float,
     cfg: TrainConfig,
 ) -> None:
     """Everything needed to inspect the policy or resume training after `update`."""
@@ -73,6 +98,7 @@ def save_checkpoint(
             "update": update,
             "total_steps": total_steps,
             "eval_area": eval_area,
+            "cert_area": cert_area,
             "config": asdict(cfg),
         },
         path,
@@ -97,6 +123,13 @@ def main(cfg: TrainConfig):
     actor = GaussianActor(obs_dim, action_dim, **asdict(cfg.network)) # network
     policy = GaussianActorPolicy(actor) # policy
     critic = ValueCritic(obs_dim, hidden_dim=cfg.network.hidden_dim)
+    if cfg.init_checkpoint is not None:
+        checkpoint = torch.load(RUNS_DIR / cfg.init_checkpoint, weights_only=False)
+        actor.load_state_dict(checkpoint["actor"])
+        critic.load_state_dict(checkpoint["critic"])
+        if not cfg.init_keep_log_std:
+            with torch.no_grad():
+                actor.log_std.fill_(cfg.network.log_std_init)
     actor_optimizer = torch.optim.Adam(actor.parameters(), lr=cfg.optim.actor_lr)
     critic_optimizer = torch.optim.Adam(critic.parameters(), lr=cfg.optim.critic_lr)
 
@@ -117,7 +150,7 @@ def main(cfg: TrainConfig):
     )
 
     total_steps = 0
-    best_eval_area = -np.inf
+    best_cert_area = -np.inf
     start = time.time()
     with open(run_dir / "metrics.jsonl", "w") as metrics_file:
         for update in range(n_updates):
@@ -129,12 +162,14 @@ def main(cfg: TrainConfig):
                 scheduler.step()
 
             corners, eval_area = evaluate(policy, eval_env)
+            cert_area = path_certified_area(corners, eval_area, cfg)
 
             # saved for (sofa_env.replay) without the network: for plots and animation
             np.savez(
                 paths_dir / f"update_{update:04d}.npz",
                 corners=corners,
                 area=eval_area,
+                cert_area=cert_area,
                 polygon=np.array(eval_env.shape.exterior.coords, dtype=np.float64).reshape(-1, 2),
                 n_steps=cfg.env.n_steps,
                 update=update,
@@ -148,6 +183,7 @@ def main(cfg: TrainConfig):
                 "actor_lr": actor_lr,
                 "max_final_area": max(e["final_area"] for e in episodes),
                 "eval_area": eval_area,
+                "cert_area": cert_area,
                 **episode_stats,
                 **update_stats,
             }
@@ -156,17 +192,17 @@ def main(cfg: TrainConfig):
 
             checkpoint_args = (
                 actor, critic, actor_optimizer, critic_optimizer, schedulers,
-                update, total_steps, eval_area, cfg,
+                update, total_steps, eval_area, cert_area, cfg,
             )
             save_checkpoint(run_dir / "last.pt", *checkpoint_args)
-            if eval_area > best_eval_area:
-                best_eval_area = eval_area
+            if cert_area > best_cert_area:
+                best_cert_area = cert_area
                 save_checkpoint(run_dir / "best.pt", *checkpoint_args)
 
             print(
                 f"update {update + 1}/{n_updates} | steps {total_steps} "
                 f"| area mean {row['mean_final_area']:.4f} max {row['max_final_area']:.4f} "
-                f"eval {eval_area:.4f} "
+                f"eval {eval_area:.4f} certified {cert_area:.4f} "
                 f"| kl {row['approx_kl']:.4f} | ev {row['explained_variance']:.2f} "
                 f"| std {row['policy_std']:.3f} | {time.time() - start:.0f}s"
             )
