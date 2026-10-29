@@ -19,3 +19,7 @@ env/
 
 # Training runs
 runs/
+
+# docs
+research_notes/
+reports/
